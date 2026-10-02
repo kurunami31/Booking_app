@@ -7,9 +7,12 @@ import 'core/config.dart';
 import 'core/theme.dart';
 import 'data/api.dart';
 import 'data/auth_controller.dart';
+import 'data/notification_service.dart';
 import 'data/offline_queue.dart';
+import 'data/passenger_alert_service.dart';
 import 'data/presence_service.dart';
 import 'data/reference_controller.dart';
+import 'models/enums.dart';
 import 'widgets/ui.dart';
 
 Future<void> main() async {
@@ -32,12 +35,22 @@ Future<void> main() async {
   final auth = AuthController(api);
   final reference = ReferenceController(api);
   final offline = OfflineQueue(api);
-  final presence = PresenceService(api);
+  final notifications = NotificationService();
+  await notifications.init();
+  final presence = PresenceService(api, notifications);
+  final passengerAlerts = PassengerAlertService(api, notifications);
 
   await auth.init();
   await reference.load();
   await offline.load();
   await offline.flush();
+
+  // Keep passenger alerts in step with who is signed in.
+  auth.addListener(() {
+    passengerAlerts.syncFor(
+      passengerId: auth.role == UserRole.passenger ? auth.userId : null,
+    );
+  });
 
   runApp(
     MultiProvider(

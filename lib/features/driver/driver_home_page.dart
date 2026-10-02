@@ -30,9 +30,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final presence = context.read<PresenceService>();
-      final driver = context.read<AuthController>().driver;
-      if (driver?.isOnline == true && !presence.isOnline) {
-        presence.goOnline();
+      final auth = context.read<AuthController>();
+      final vehicle = auth.vehicle;
+      if (auth.driver?.isOnline == true && !presence.isOnline && vehicle != null) {
+        presence.goOnline(vehicleType: vehicle.type);
       }
     });
   }
@@ -40,8 +41,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
   Future<void> _toggleOnline(bool next) async {
     final auth = context.read<AuthController>();
     final presence = context.read<PresenceService>();
+    final vehicle = auth.vehicle;
     if (next) {
-      await presence.goOnline();
+      if (vehicle == null) return;
+      await presence.goOnline(vehicleType: vehicle.type);
     } else {
       await presence.goOffline();
     }

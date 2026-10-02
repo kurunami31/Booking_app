@@ -3,34 +3,44 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../core/format.dart';
 import '../core/geo.dart';
+import '../models/enums.dart';
+import '../models/rows.dart';
 import 'api.dart';
+import 'notification_service.dart';
 
 /// Keeps a driver "online" while the app is backgrounded.
 ///
 /// Runs above the page tree so leaving the dashboard does not stop presence,
 /// and uses an Android foreground service so location updates continue with the
-/// screen off. Presence is pinged on an interval regardless of whether the
-/// position changed, so a stationary driver does not look stale.
+/// screen off. While online it also listens to new requests over Supabase
+/// Realtime and raises a local notification, so drivers get alerted without a
+/// third-party push service.
 class PresenceService extends ChangeNotifier {
-  PresenceService(this.api);
+  PresenceService(this.api, this.notifications);
 
   final Api api;
+  final NotificationService notifications;
 
   StreamSubscription<Position>? _positionSub;
+  StreamSubscription<List<Booking>>? _requestSub;
   Timer? _pingTimer;
   LatLng? _last;
   bool _online = false;
   String? _error;
+  bool _firstSnapshot = true;
+  final Set<String> _notifiedRequests = <String>{};
 
   bool get isOnline => _online;
   String? get error => _error;
   LatLng? get lastPosition => _last;
 
-  Future<void> goOnline() async {
+  Future<void> goOnline({required VehicleType vehicleType}) async {
     if (_online) return;
     _online = true;
     _error = null;
+    _firstSnapshot = true;
     notifyListeners();
 
     try {
@@ -45,6 +55,8 @@ class PresenceService extends ChangeNotifier {
         notifyListeners();
         return;
       }
+
+      await notifications.requestPermission();
 
       final settings = (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
           ? AndroidSettings(
@@ -76,6 +88,8 @@ class PresenceService extends ChangeNotifier {
         },
       );
 
+      _startRequestAlerts(vehicleType);
+
       // Backup ping so presence stays fresh even without movement.
       _pingTimer = Timer.periodic(const Duration(seconds: 15), (_) => _push());
       await _push();
@@ -86,6 +100,33 @@ class PresenceService extends ChangeNotifier {
     }
   }
 
+  void _startRequestAlerts(VehicleType vehicleType) {
+    _requestSub?.cancel();
+    _notifiedRequests.clear();
+    _requestSub = api.openRequests(vehicleType).listen((requests) {
+      if (_firstSnapshot) {
+        // Do not blast a notification for requests that were already open when
+        // the driver came online.
+        _firstSnapshot = false;
+        for (final r in requests) {
+          _notifiedRequests.add(r.id);
+        }
+        return;
+      }
+      for (final request in requests) {
+        if (_notifiedRequests.add(request.id)) {
+          notifications.show(
+            title: 'New ride request',
+            body: '${request.originLabel ?? 'Pickup'} → ${request.destLabel ?? 'Dropoff'}'
+                ' · ${formatPeso(request.fare)}',
+            payload: request.id,
+            urgent: true,
+          );
+        }
+      }
+    });
+  }
+
   Future<void> goOffline() async {
     if (!_online && _positionSub == null) return;
     _online = false;
@@ -93,8 +134,11 @@ class PresenceService extends ChangeNotifier {
 
     await _positionSub?.cancel();
     _positionSub = null;
+    await _requestSub?.cancel();
+    _requestSub = null;
     _pingTimer?.cancel();
     _pingTimer = null;
+    _notifiedRequests.clear();
 
     try {
       await api.setPresence(online: false, at: _last);
@@ -115,6 +159,7 @@ class PresenceService extends ChangeNotifier {
   @override
   void dispose() {
     _positionSub?.cancel();
+    _requestSub?.cancel();
     _pingTimer?.cancel();
     super.dispose();
   }

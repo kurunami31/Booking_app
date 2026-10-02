@@ -85,6 +85,20 @@ lib/
     admin/
 ```
 
+## Notifications
+
+Job alerts do **not** depend on Firebase. While a driver is online, the app runs
+an Android foreground service (for location) and keeps a Supabase Realtime
+subscription open. New requests raise an on-device notification through
+`flutter_local_notifications` (`lib/data/notification_service.dart`,
+`lib/data/presence_service.dart`). Passengers get trip-status notifications the
+same way (`lib/data/passenger_alert_service.dart`).
+
+This works with no external accounts and no cost. Its limit: if the OS fully
+kills the app process, alerts stop until the app is reopened. A Firebase Cloud
+Messaging path (free, no billing) is prepared on the backend but optional — see
+the web repo's `supabase/functions/send-push` and migration `0003_push.sql`.
+
 ## Notes and limits in this MVP
 
 - Cash only. Commission is recorded per trip; settlement is manual.
@@ -93,7 +107,6 @@ lib/
 - Matching is broadcast: any verified, online driver of the matching vehicle
   type can accept; the first accept wins. Directed nearest-driver dispatch is a
   later phase.
-- No push notifications yet. The driver app must be open to see new requests.
 - SOS logs the alert; it does not dispatch responders or guarantee a response
   time. Who receives it must be confirmed with PNP Mati, MDRRMO, and 911.
 - Android builds on this machine disable Kotlin incremental compilation
