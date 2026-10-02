@@ -15,12 +15,14 @@ import 'features/admin/admin_reports_page.dart';
 import 'features/admin/admin_sos_page.dart';
 import 'features/admin/admin_verification_page.dart';
 import 'features/auth/sign_in_page.dart';
+import 'features/auth/welcome_page.dart';
 import 'features/driver/driver_earnings_page.dart';
 import 'features/driver/driver_home_page.dart';
 import 'features/driver/driver_trip_page.dart';
 import 'features/passenger/passenger_history_page.dart';
 import 'features/passenger/passenger_home_page.dart';
 import 'features/passenger/passenger_trip_page.dart';
+import 'features/passenger/wallet_page.dart';
 import 'models/enums.dart';
 import 'widgets/ui.dart';
 
@@ -70,23 +72,24 @@ String _roleHome(UserRole? role) => switch (role) {
 GoRouter _buildRouter(AuthController auth) {
   return GoRouter(
     refreshListenable: auth,
-    initialLocation: '/',
+    initialLocation: '/welcome',
     redirect: (context, state) {
       final loc = state.matchedLocation;
       if (!auth.isSignedIn) {
-        return loc == '/signin' ? null : '/signin';
+        return (loc == '/signin' || loc == '/welcome') ? null : '/welcome';
       }
-      if (loc == '/signin') return _roleHome(auth.role);
+      if (loc == '/signin' || loc == '/welcome') return _roleHome(auth.role);
       final role = auth.role;
       if (loc.startsWith('/admin') && role != UserRole.admin) return _roleHome(role);
       if (loc.startsWith('/driver') && role != UserRole.driver) return _roleHome(role);
-      if ((loc == '/' || loc == '/trip' || loc == '/history') &&
+      if ((loc == '/' || loc == '/trip' || loc == '/history' || loc == '/wallet') &&
           role != UserRole.passenger) {
         return _roleHome(role);
       }
       return null;
     },
     routes: [
+      GoRoute(path: '/welcome', builder: (context, state) => const WelcomePage()),
       GoRoute(path: '/signin', builder: (context, state) => const SignInPage()),
       ShellRoute(
         builder: (context, state, child) =>
@@ -95,6 +98,7 @@ GoRouter _buildRouter(AuthController auth) {
           GoRoute(path: '/', builder: (c, s) => const PassengerHomePage()),
           GoRoute(path: '/trip', builder: (c, s) => const PassengerTripPage()),
           GoRoute(path: '/history', builder: (c, s) => const PassengerHistoryPage()),
+          GoRoute(path: '/wallet', builder: (c, s) => const WalletPage()),
           GoRoute(path: '/driver', builder: (c, s) => const DriverHomePage()),
           GoRoute(path: '/driver/trip', builder: (c, s) => const DriverTripPage()),
           GoRoute(
@@ -131,6 +135,7 @@ class AppShell extends StatelessWidget {
       if (role == UserRole.passenger) ...[
         (path: '/', icon: Icons.directions_car, label: 'Book'),
         (path: '/history', icon: Icons.history, label: 'History'),
+        (path: '/wallet', icon: Icons.account_balance_wallet, label: 'Wallet'),
       ],
       if (role == UserRole.driver) ...[
         (path: '/driver', icon: Icons.electric_rickshaw, label: 'Drive'),

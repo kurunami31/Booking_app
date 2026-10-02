@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
@@ -8,6 +10,7 @@ import '../../core/format.dart';
 import '../../core/geo.dart';
 import '../../data/api.dart';
 import '../../data/auth_controller.dart';
+import '../../data/notification_service.dart';
 import '../../data/offline_queue.dart';
 import '../../data/reference_controller.dart';
 import '../../models/enums.dart';
@@ -78,10 +81,129 @@ class _TripBodyState extends State<_TripBody> {
   int _stars = 5;
   final _comment = TextEditingController();
 
+  StreamSubscription<Driver?>? _driverSub;
+  Driver? _driver;
+  RouteResult? _route;
+  DateTime? _lastRouteAt;
+  LatLng? _lastRouteFrom;
+  bool _arriving = false;
+  bool _arrivingNotified = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribeDriver();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TripBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.booking.driverId != widget.booking.driverId) {
+      _route = null;
+      _arriving = false;
+      _arrivingNotified = false;
+      _subscribeDriver();
+    }
+  }
+
   @override
   void dispose() {
+    _driverSub?.cancel();
     _comment.dispose();
     super.dispose();
+  }
+
+  void _subscribeDriver() {
+    _driverSub?.cancel();
+    final driverId = widget.booking.driverId;
+    if (driverId == null) {
+      _driver = null;
+      return;
+    }
+    _driverSub = context.read<Api>().driverById(driverId).listen((driver) {
+      if (!mounted) return;
+      setState(() => _driver = driver);
+      _maybeComputeRoute();
+      _checkArrival();
+    });
+  }
+
+  LatLng? get _driverPos {
+    final d = _driver;
+    if (d?.lastLat == null || d?.lastLng == null) return null;
+    return LatLng(d!.lastLat!, d.lastLng!);
+  }
+
+  /// Where the driver is heading right now: pickup, then dropoff.
+  LatLng? _targetPoint(Booking b) {
+    if (b.status == BookingStatus.assigned || b.status == BookingStatus.arrived) {
+      if (b.originLat != null && b.originLng != null) {
+        return LatLng(b.originLat!, b.originLng!);
+      }
+    }
+    if (b.status == BookingStatus.inProgress) {
+      if (b.destLat != null && b.destLng != null) {
+        return LatLng(b.destLat!, b.destLng!);
+      }
+    }
+    return null;
+  }
+
+  Future<void> _maybeComputeRoute() async {
+    final booking = widget.booking;
+    if (!booking.status.isActive) return;
+    final from = _driverPos;
+    final to = _targetPoint(booking);
+    if (from == null || to == null) return;
+
+    final now = DateTime.now();
+    final movedKm = _lastRouteFrom == null ? double.infinity : haversineKm(_lastRouteFrom!, from);
+    // Throttle: at most every 20s, and only if the driver moved ~50 m.
+    if (_lastRouteAt != null &&
+        now.difference(_lastRouteAt!).inSeconds < 20 &&
+        movedKm < 0.05) {
+      return;
+    }
+    _lastRouteAt = now;
+    _lastRouteFrom = from;
+
+    try {
+      final route = await context.read<Api>().getRoute(from: from, to: to);
+      if (mounted && route != null) setState(() => _route = route);
+    } catch (_) {
+      // keep the straight-line fallback
+    }
+  }
+
+  void _checkArrival() {
+    final booking = widget.booking;
+    if (booking.status != BookingStatus.inProgress || _arrivingNotified) return;
+    final driverPos = _driverPos;
+    if (driverPos == null || booking.destLat == null || booking.destLng == null) return;
+    final to = LatLng(booking.destLat!, booking.destLng!);
+    if (haversineKm(driverPos, to) <= 0.15) {
+      _arrivingNotified = true;
+      setState(() => _arriving = true);
+      context.read<NotificationService>().show(
+            title: 'Arriving now',
+            body: 'You are almost at ${booking.destLabel ?? 'your destination'}.',
+            payload: booking.id,
+            urgent: true,
+          );
+    }
+  }
+
+  /// Minutes remaining, route-based when available, straight-line otherwise.
+  int? _etaMinutes() {
+    final to = _targetPoint(widget.booking);
+    if (to == null) return null;
+    final route = _route;
+    if (route != null && route.points.isNotEmpty && route.durationS > 0) {
+      return route.etaMinutes;
+    }
+    final from = _driverPos;
+    if (from == null) return null;
+    return etaMinutes(haversineKm(from, to));
   }
 
   Future<void> _cancel() async {
@@ -187,13 +309,13 @@ class _TripBodyState extends State<_TripBody> {
   Widget build(BuildContext context) {
     final booking = widget.booking;
     final reference = context.read<ReferenceController>();
-    final api = context.read<Api>();
     final canSos = {
       BookingStatus.assigned,
       BookingStatus.arrived,
       BookingStatus.inProgress,
     }.contains(booking.status);
 
+    final driverPos = _driverPos;
     final markers = <RideMarker>[
       if (booking.originLat != null && booking.originLng != null)
         RideMarker(
@@ -209,6 +331,16 @@ class _TripBodyState extends State<_TripBody> {
           label: 'Dropoff: ${booking.destLabel ?? ''}',
           kind: MapMarkerKind.dropoff,
         ),
+      if (driverPos != null)
+        RideMarker(
+          id: 'driver',
+          point: driverPos,
+          label: 'Your driver',
+          kind: MapMarkerKind.driver,
+        ),
+    ];
+    final polylines = <List<LatLng>>[
+      if (_route != null && _route!.points.isNotEmpty) _route!.points,
     ];
 
     return ListView(
@@ -240,9 +372,16 @@ class _TripBodyState extends State<_TripBody> {
           const SizedBox(height: 12),
         ],
         if (markers.isNotEmpty) ...[
-          RideMap(markers: markers, center: markers.first.point),
+          RideMap(markers: markers, polylines: polylines, center: markers.first.point),
           const SizedBox(height: 12),
         ],
+        _StatusBanner(
+          booking: booking,
+          etaMinutes: _etaMinutes(),
+          arriving: _arriving,
+          hasDriverFix: driverPos != null,
+        ),
+        const SizedBox(height: 12),
         if (booking.status.isActive)
           InfoCard(
             child: Column(
@@ -272,49 +411,9 @@ class _TripBodyState extends State<_TripBody> {
               ],
             ),
           ),
-        if (booking.driverId != null) ...[
+        if (_driver != null) ...[
           const SizedBox(height: 12),
-          FutureBuilder<List<dynamic>>(
-            future: Future.wait([
-              api.fetchDriverById(booking.driverId!),
-              api.fetchBooking(booking.id),
-            ]),
-            builder: (context, snapshot) {
-              final driver = snapshot.data?[0] as Driver?;
-              if (driver == null) return const SizedBox.shrink();
-              return FutureBuilder<dynamic>(
-                future: api.fetchProfile(driver.profileId),
-                builder: (context, profileSnapshot) {
-                  final profile = profileSnapshot.data as Profile?;
-                  return InfoCard(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('YOUR DRIVER',
-                            style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF64748B))),
-                        Text(profile?.fullName ?? 'Driver',
-                            style: const TextStyle(
-                                fontSize: 18, fontWeight: FontWeight.w700)),
-                        if (driver.rating != null)
-                          Text(
-                            'Rating ${driver.rating!.toStringAsFixed(1)} (${driver.ratingCount})',
-                            style: const TextStyle(
-                                fontSize: 12, color: Color(0xFF64748B)),
-                          ),
-                        if (driver.licenseNo != null)
-                          Text('License ${driver.licenseNo}',
-                              style: const TextStyle(
-                                  fontSize: 12, color: Color(0xFF64748B))),
-                      ],
-                    ),
-                  );
-                },
-              );
-            },
-          ),
+          _DriverCard(driver: _driver!, booking: booking),
         ],
         if (booking.status == BookingStatus.requested) ...[
           const SizedBox(height: 12),
@@ -340,9 +439,11 @@ class _TripBodyState extends State<_TripBody> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text('You have arrived at ${booking.destLabel ?? 'your destination'}.',
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
                 const Text('Rate your driver',
                     style: TextStyle(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 8),
                 Row(
                   children: [
                     for (var n = 1; n <= 5; n++)
@@ -393,6 +494,168 @@ class _TripBodyState extends State<_TripBody> {
         ],
       ],
     );
+  }
+}
+
+class _DriverCard extends StatefulWidget {
+  const _DriverCard({required this.driver, required this.booking});
+  final Driver driver;
+  final Booking booking;
+
+  @override
+  State<_DriverCard> createState() => _DriverCardState();
+}
+
+class _DriverInfo {
+  const _DriverInfo({this.profile, this.vehicle, this.driverPhoto, this.vehiclePhoto});
+  final Profile? profile;
+  final Vehicle? vehicle;
+  final String? driverPhoto;
+  final String? vehiclePhoto;
+}
+
+class _DriverCardState extends State<_DriverCard> {
+  late Future<_DriverInfo> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<_DriverInfo> _load() async {
+    final api = context.read<Api>();
+    final profile = await api.fetchProfile(widget.driver.profileId);
+    final vehicle = await api.fetchVehicle(widget.driver.id);
+    final driverPhoto = await api.signedPhotoUrl(widget.driver.photoUrl);
+    final vehiclePhoto = await api.signedPhotoUrl(vehicle?.photoUrl);
+    return _DriverInfo(
+      profile: profile,
+      vehicle: vehicle,
+      driverPhoto: driverPhoto,
+      vehiclePhoto: vehiclePhoto,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = widget.driver;
+    return FutureBuilder<_DriverInfo>(
+      future: _future,
+      builder: (context, snapshot) {
+        final info = snapshot.data;
+        return InfoCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('YOUR DRIVER',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF64748B))),
+              const SizedBox(height: 6),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipOval(
+                    child: Container(
+                      width: 56,
+                      height: 56,
+                      color: const Color(0xFFE2E8F0),
+                      child: (info?.driverPhoto == null)
+                          ? const Icon(Icons.person, color: Color(0xFF64748B))
+                          : Image.network(info!.driverPhoto!,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) =>
+                                  const Icon(Icons.person, color: Color(0xFF64748B))),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(info?.profile?.fullName ?? 'Driver',
+                            style: const TextStyle(
+                                fontSize: 18, fontWeight: FontWeight.w700)),
+                        if (d.rating != null)
+                          Text('Rating ${d.rating!.toStringAsFixed(1)} (${d.ratingCount})',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFF64748B))),
+                        if (info?.vehicle != null)
+                          Text(
+                            '${info!.vehicle!.type.label} · Unit ${info.vehicle!.unitNo ?? '—'} · Plate ${info.vehicle!.plateNo ?? '—'}',
+                            style: const TextStyle(
+                                fontSize: 12, color: Color(0xFF64748B)),
+                          ),
+                        if (d.licenseNo != null)
+                          Text('License ${d.licenseNo}',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFF64748B))),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              if (info?.vehiclePhoto != null) ...[
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.network(
+                    info!.vehiclePhoto!,
+                    height: 140,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Text('Vehicle photo',
+                      style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _StatusBanner extends StatelessWidget {
+  const _StatusBanner({
+    required this.booking,
+    required this.etaMinutes,
+    required this.arriving,
+    required this.hasDriverFix,
+  });
+
+  final Booking booking;
+  final int? etaMinutes;
+  final bool arriving;
+  final bool hasDriverFix;
+
+  @override
+  Widget build(BuildContext context) {
+    if (booking.status == BookingStatus.assigned ||
+        booking.status == BookingStatus.arrived) {
+      final eta = etaMinutes == null
+          ? (hasDriverFix ? 'Driver is on the way' : 'Locating your driver…')
+          : (etaMinutes! <= 1 ? 'Driver is arriving now' : 'Driver is ~$etaMinutes min away');
+      return ErrorBanner(eta, tone: Tone.info);
+    }
+    if (booking.status == BookingStatus.inProgress) {
+      if (arriving) {
+        return const ErrorBanner('Arriving now — please get ready to alight.',
+            tone: Tone.good);
+      }
+      final eta = etaMinutes == null
+          ? 'On the way'
+          : (etaMinutes! <= 1 ? 'Arriving now' : '~$etaMinutes min to ${booking.destLabel ?? 'destination'}');
+      return ErrorBanner(eta, tone: Tone.good);
+    }
+    return const SizedBox.shrink();
   }
 }
 

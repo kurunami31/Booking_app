@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/geo.dart';
@@ -283,6 +285,91 @@ class Api {
       .stream(primaryKey: ['id'])
       .eq('is_online', true)
       .map((rows) => rows.map((r) => Driver.fromMap(r)).toList());
+
+  /// Live position of one driver (used for passenger tracking).
+  Stream<Driver?> driverById(String driverId) => _c
+      .from('drivers')
+      .stream(primaryKey: ['id'])
+      .eq('id', driverId)
+      .map((rows) => rows.isEmpty ? null : Driver.fromMap(rows.first));
+
+  /// Real road route + ETA via the `route` edge function (OpenRouteService).
+  Future<RouteResult?> getRoute({
+    required LatLng from,
+    required LatLng to,
+  }) async {
+    final res = await _c.functions.invoke('route', body: {
+      'from': [from.lng, from.lat],
+      'to': [to.lng, to.lat],
+    });
+    final data = res.data;
+    if (data is Map) {
+      return RouteResult.fromMap(Map<String, dynamic>.from(data));
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Photos (private bucket 'driver-photos', path = {profileId}/{kind}.{ext})
+  // ---------------------------------------------------------------------------
+
+  Future<String> uploadPhoto({
+    required String profileId,
+    required String kind,
+    required Uint8List bytes,
+    String ext = 'jpg',
+  }) async {
+    final path = '$profileId/$kind.$ext';
+    await _c.storage.from('driver-photos').uploadBinary(
+          path,
+          bytes,
+          fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: true),
+        );
+    return path;
+  }
+
+  Future<String?> signedPhotoUrl(String? path, {int expiresIn = 3600}) async {
+    if (path == null || path.isEmpty) return null;
+    // Already a full URL (e.g. legacy pasted link) — return as-is.
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    try {
+      return await _c.storage.from('driver-photos').createSignedUrl(path, expiresIn);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mock wallet + simulated e-wallet payments
+  // ---------------------------------------------------------------------------
+
+  Stream<double> walletBalance(String profileId) => _c
+      .from('wallets')
+      .stream(primaryKey: ['profile_id'])
+      .eq('profile_id', profileId)
+      .map((rows) =>
+          rows.isEmpty ? 0.0 : (rows.first['balance'] as num).toDouble());
+
+  Future<double> walletTopup(double amount) async {
+    final result = await _c.rpc('wallet_topup', params: {'p_amount': amount});
+    return (result as num).toDouble();
+  }
+
+  Future<void> walletPayBooking(String bookingId) =>
+      _c.rpc('wallet_pay_booking', params: {'p_booking_id': bookingId});
+
+  Future<void> mockEwalletPay(String bookingId, String provider) =>
+      _c.rpc('mock_ewallet_pay', params: {
+        'p_booking_id': bookingId,
+        'p_provider': provider,
+      });
+
+  Stream<List<Map<String, dynamic>>> walletTransactions(String profileId) => _c
+      .from('wallet_transactions')
+      .stream(primaryKey: ['id'])
+      .eq('profile_id', profileId)
+      .order('created_at')
+      .map((rows) => rows.reversed.toList());
 
   Stream<List<SosAlert>> sosAlerts() => _c
       .from('sos_alerts')

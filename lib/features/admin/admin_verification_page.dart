@@ -182,6 +182,19 @@ class _AdminVerificationPageState extends State<AdminVerificationPage> {
                     ),
                     const SizedBox(height: 8),
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                            child: _PhotoThumb(
+                                path: candidate.driver.photoUrl, label: 'Driver selfie')),
+                        const SizedBox(width: 8),
+                        Expanded(
+                            child: _PhotoThumb(
+                                path: candidate.vehicle?.photoUrl, label: 'Vehicle')),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
                       children: [
                         Expanded(
                           child: FilledButton(
@@ -220,4 +233,69 @@ class _Candidate {
   final Driver driver;
   final Vehicle? vehicle;
   final Profile? profile;
+}
+
+class _PhotoThumb extends StatefulWidget {
+  const _PhotoThumb({required this.path, required this.label});
+  final String? path;
+  final String label;
+
+  @override
+  State<_PhotoThumb> createState() => _PhotoThumbState();
+}
+
+class _PhotoThumbState extends State<_PhotoThumb> {
+  late Future<String?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _resolve();
+  }
+
+  Future<String?> _resolve() async {
+    final p = widget.path;
+    if (p == null || p.isEmpty) return null;
+    if (p.startsWith('http')) return p;
+    try {
+      return await Supabase.instance.client.storage
+          .from('driver-photos')
+          .createSignedUrl(p, 3600);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String?>(
+      future: _future,
+      builder: (context, snapshot) {
+        final url = snapshot.data;
+        return Column(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                height: 90,
+                width: double.infinity,
+                color: const Color(0xFFE2E8F0),
+                child: url == null
+                    ? const Icon(Icons.image_not_supported_outlined,
+                        color: Color(0xFF94A3B8))
+                    : Image.network(url,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => const Icon(
+                            Icons.broken_image_outlined,
+                            color: Color(0xFF94A3B8))),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(widget.label,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+          ],
+        );
+      },
+    );
+  }
 }

@@ -32,12 +32,14 @@ class RideMap extends StatelessWidget {
   const RideMap({
     super.key,
     required this.markers,
+    this.polylines = const [],
     this.center,
     this.zoom = 14,
     this.height = 220,
   });
 
   final List<RideMarker> markers;
+  final List<List<LatLng>> polylines;
   final LatLng? center;
   final double zoom;
   final double height;
@@ -61,6 +63,19 @@ class RideMap extends StatelessWidget {
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.sakayta.sakay_ta',
             ),
+            if (polylines.isNotEmpty)
+              PolylineLayer(
+                polylines: [
+                  for (final line in polylines)
+                    Polyline(
+                      points: [
+                        for (final p in line) ll.LatLng(p.lat, p.lng),
+                      ],
+                      strokeWidth: 5,
+                      color: AppTheme.brand700,
+                    ),
+                ],
+              ),
             MarkerLayer(
               markers: [
                 for (final marker in markers)

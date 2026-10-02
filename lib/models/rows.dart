@@ -1,4 +1,5 @@
 import 'enums.dart';
+import '../core/geo.dart';
 
 DateTime? _dt(dynamic value) =>
     value == null ? null : DateTime.parse(value as String);
@@ -33,6 +34,7 @@ class Driver {
     required this.status,
     this.licenseNo,
     this.idPhotoUrl,
+    this.photoUrl,
     this.rating,
     this.ratingCount = 0,
     this.isOnline = false,
@@ -48,6 +50,7 @@ class Driver {
   final DriverStatus status;
   final String? licenseNo;
   final String? idPhotoUrl;
+  final String? photoUrl;
   final double? rating;
   final int ratingCount;
   final bool isOnline;
@@ -63,6 +66,7 @@ class Driver {
         status: DriverStatus.fromDb(map['status'] as String),
         licenseNo: map['license_no'] as String?,
         idPhotoUrl: map['id_photo_url'] as String?,
+        photoUrl: map['photo_url'] as String?,
         rating: _dbl(map['rating']),
         ratingCount: (map['rating_count'] as num?)?.toInt() ?? 0,
         isOnline: (map['is_online'] as bool?) ?? false,
@@ -82,6 +86,7 @@ class Vehicle {
     this.plateNo,
     this.unitNo,
     this.franchiseNo,
+    this.photoUrl,
     this.verified = false,
   });
 
@@ -91,6 +96,7 @@ class Vehicle {
   final String? plateNo;
   final String? unitNo;
   final String? franchiseNo;
+  final String? photoUrl;
   final bool verified;
 
   factory Vehicle.fromMap(Map<String, dynamic> map) => Vehicle(
@@ -100,6 +106,7 @@ class Vehicle {
         plateNo: map['plate_no'] as String?,
         unitNo: map['unit_no'] as String?,
         franchiseNo: map['franchise_no'] as String?,
+        photoUrl: map['photo_url'] as String?,
         verified: (map['verified'] as bool?) ?? false,
       );
 }
@@ -251,6 +258,7 @@ class Payment {
     required this.driverNet,
     required this.status,
     required this.method,
+    this.provider,
   });
 
   final String id;
@@ -260,6 +268,7 @@ class Payment {
   final double driverNet;
   final PaymentStatus status;
   final PaymentMethod method;
+  final String? provider;
 
   factory Payment.fromMap(Map<String, dynamic> map) => Payment(
         id: map['id'] as String,
@@ -269,6 +278,7 @@ class Payment {
         driverNet: (map['driver_net'] as num).toDouble(),
         status: PaymentStatus.fromDb(map['status'] as String),
         method: PaymentMethod.fromDb(map['method'] as String),
+        provider: map['provider'] as String?,
       );
 }
 
@@ -352,8 +362,7 @@ class AppSettings {
   }
 }
 
-class NearbyDriver {
-  const NearbyDriver({
+class NearbyDriver {  const NearbyDriver({
     required this.driverId,
     required this.vehicleId,
     required this.distanceKm,
@@ -378,3 +387,36 @@ class NearbyDriver {
         rating: _dbl(map['rating']),
       );
 }
+
+/// Result of the `route` edge function (OpenRouteService).
+class RouteResult {
+  const RouteResult({
+    required this.distanceM,
+    required this.durationS,
+    required this.points,
+  });
+
+  final int distanceM;
+  final int durationS;
+  final List<LatLng> points;
+
+  double get distanceKm => distanceM / 1000.0;
+  int get etaMinutes => durationS <= 0 ? 0 : (durationS / 60).ceil();
+
+  factory RouteResult.fromMap(Map<String, dynamic> map) {
+    final coords = (map['geometry'] as List?) ?? const [];
+    return RouteResult(
+      distanceM: (map['distance_m'] as num?)?.toInt() ?? 0,
+      durationS: (map['duration_s'] as num?)?.toInt() ?? 0,
+      points: coords
+          .whereType<List>()
+          .where((c) => c.length >= 2)
+          .map((c) => LatLng(
+                (c[1] as num).toDouble(),
+                (c[0] as num).toDouble(),
+              ))
+          .toList(),
+    );
+  }
+}
+

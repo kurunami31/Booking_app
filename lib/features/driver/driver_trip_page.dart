@@ -294,9 +294,11 @@ class _DriverTripBodyState extends State<_DriverTripBody> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _payment?.status == PaymentStatus.collected
-                      ? 'Cash collected'
-                      : 'Collect cash from passenger',
+                  _payment?.status == PaymentStatus.paid
+                      ? 'Paid via ${_payment?.provider ?? 'e-wallet'}'
+                      : (_payment?.status == PaymentStatus.collected
+                          ? 'Cash collected'
+                          : 'Collect cash from passenger'),
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
                 if (_payment != null)
@@ -305,7 +307,8 @@ class _DriverTripBodyState extends State<_DriverTripBody> {
                     style: const TextStyle(fontSize: 13, color: Color(0xFF64748B)),
                   ),
                 const SizedBox(height: 8),
-                if (_payment?.status != PaymentStatus.collected)
+                if (_payment?.status != PaymentStatus.collected &&
+                    _payment?.status != PaymentStatus.paid)
                   FilledButton(
                     onPressed: _busy ? null : _collected,
                     child: const Text('Mark cash collected'),

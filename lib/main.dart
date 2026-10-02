@@ -56,6 +56,7 @@ Future<void> main() async {
     MultiProvider(
       providers: [
         Provider<Api>.value(value: api),
+        Provider<NotificationService>.value(value: notifications),
         ChangeNotifierProvider<AuthController>.value(value: auth),
         ChangeNotifierProvider<ReferenceController>.value(value: reference),
         ChangeNotifierProvider<OfflineQueue>.value(value: offline),

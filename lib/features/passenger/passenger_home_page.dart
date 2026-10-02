@@ -28,6 +28,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   DiscountType? _discount;
   int _passengerCount = 1;
   bool _hasLuggage = false;
+  String _paymentMethod = 'cash';
 
   LatLng? _gps;
   bool _locating = false;
@@ -122,7 +123,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     };
 
     try {
-      await api.requestBooking(
+      final booking = await api.requestBooking(
         vehicleType: _vehicleType,
         originZone: origin,
         destZone: dest,
@@ -136,6 +137,15 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
         passengerCount: _passengerCount,
         hasLuggage: _hasLuggage,
       );
+
+      // Settle cashless rides immediately. This is simulated; a real gateway
+      // would charge at the end of the trip.
+      if (_paymentMethod == 'wallet') {
+        await api.walletPayBooking(booking.id);
+      } else if (_paymentMethod == 'ewallet') {
+        await api.mockEwalletPay(booking.id, 'gcash');
+      }
+
       if (mounted) context.go('/trip');
     } on PostgrestException catch (e) {
       setState(() => _message = e.message);
@@ -328,6 +338,34 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
               destZone: _destZone,
               origin: _gps,
               discount: _discount,
+            ),
+            const SizedBox(height: 12),
+            InfoCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const FieldLabel('Payment method',
+                      hint: 'Wallet and GCash are simulated for now.'),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(
+                          value: 'cash',
+                          label: Text('Cash'),
+                          icon: Icon(Icons.payments_outlined, size: 16)),
+                      ButtonSegment(
+                          value: 'wallet',
+                          label: Text('Wallet'),
+                          icon: Icon(Icons.account_balance_wallet_outlined, size: 16)),
+                      ButtonSegment(
+                          value: 'ewallet',
+                          label: Text('GCash'),
+                          icon: Icon(Icons.phone_android, size: 16)),
+                    ],
+                    selected: {_paymentMethod},
+                    onSelectionChanged: (s) => setState(() => _paymentMethod = s.first),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 12),
             FilledButton(

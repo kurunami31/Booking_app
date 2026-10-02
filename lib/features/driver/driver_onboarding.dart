@@ -1,7 +1,11 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../data/api.dart';
 import '../../data/auth_controller.dart';
 import '../../models/enums.dart';
 import '../../widgets/ui.dart';
@@ -22,6 +26,26 @@ class _DriverOnboardingFormState extends State<DriverOnboardingForm> {
   VehicleType _vehicleType = VehicleType.tricycle;
   bool _busy = false;
   String? _error;
+  Uint8List? _selfieBytes;
+  Uint8List? _vehiclePhotoBytes;
+  final _picker = ImagePicker();
+
+  Future<void> _pickPhoto({required bool selfie}) async {
+    final file = await _picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1280,
+      imageQuality: 80,
+    );
+    if (file == null) return;
+    final bytes = await file.readAsBytes();
+    setState(() {
+      if (selfie) {
+        _selfieBytes = bytes;
+      } else {
+        _vehiclePhotoBytes = bytes;
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -44,12 +68,32 @@ class _DriverOnboardingFormState extends State<DriverOnboardingForm> {
     });
 
     try {
+      final api = context.read<Api>();
+
+      String? selfiePath;
+      String? vehiclePhotoPath;
+      if (_selfieBytes != null) {
+        selfiePath = await api.uploadPhoto(
+          profileId: userId,
+          kind: 'profile',
+          bytes: _selfieBytes!,
+        );
+      }
+      if (_vehiclePhotoBytes != null) {
+        vehiclePhotoPath = await api.uploadPhoto(
+          profileId: userId,
+          kind: 'vehicle',
+          bytes: _vehiclePhotoBytes!,
+        );
+      }
+
       final driver = await Supabase.instance.client
           .from('drivers')
           .insert({
             'profile_id': userId,
             'license_no': _license.text.trim(),
             'id_photo_url': _idPhoto.text.trim().isEmpty ? null : _idPhoto.text.trim(),
+            'photo_url': selfiePath,
           })
           .select('id')
           .single();
@@ -60,6 +104,7 @@ class _DriverOnboardingFormState extends State<DriverOnboardingForm> {
         'unit_no': _unit.text.trim().isEmpty ? null : _unit.text.trim(),
         'plate_no': _plate.text.trim().isEmpty ? null : _plate.text.trim(),
         'franchise_no': _franchise.text.trim().isEmpty ? null : _franchise.text.trim(),
+        'photo_url': vehiclePhotoPath,
       });
 
       await auth.refresh();
@@ -85,7 +130,7 @@ class _DriverOnboardingFormState extends State<DriverOnboardingForm> {
         ),
         const SizedBox(height: 12),
         const ErrorBanner(
-          'Verification is manual in this MVP. An admin reviews your license and franchise number against the LGU list. Photo upload is not built; paste a link to your ID photo.',
+          'Verification is manual. An admin reviews your license and franchise number against the LGU list. Add clear photos below.',
           tone: Tone.warn,
         ),
         const SizedBox(height: 12),
@@ -118,6 +163,22 @@ class _DriverOnboardingFormState extends State<DriverOnboardingForm> {
               const FieldLabel('Franchise / registration number',
                   hint: 'From your LGU franchise. [VERIFY format]'),
               TextField(controller: _franchise),
+              const SizedBox(height: 12),
+              const FieldLabel('Driver selfie',
+                  hint: 'Shown to passengers during the ride.'),
+              _PhotoPickTile(
+                bytes: _selfieBytes,
+                label: 'Add driver photo',
+                onPick: () => _pickPhoto(selfie: true),
+              ),
+              const SizedBox(height: 12),
+              const FieldLabel('Vehicle photo',
+                  hint: 'Shown to passengers so they can spot your unit.'),
+              _PhotoPickTile(
+                bytes: _vehiclePhotoBytes,
+                label: 'Add vehicle photo',
+                onPick: () => _pickPhoto(selfie: false),
+              ),
               const SizedBox(height: 16),
               FilledButton(
                 onPressed: _busy ? null : _submit,
@@ -195,3 +256,43 @@ class DriverSuspendedView extends StatelessWidget {
     );
   }
 }
+
+class _PhotoPickTile extends StatelessWidget {
+  const _PhotoPickTile({
+    required this.bytes,
+    required this.label,
+    required this.onPick,
+  });
+
+  final Uint8List? bytes;
+  final String label;
+  final VoidCallback onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            width: 64,
+            height: 64,
+            color: const Color(0xFFE2E8F0),
+            child: bytes == null
+                ? const Icon(Icons.photo_camera_outlined, color: Color(0xFF64748B))
+                : Image.memory(bytes!, fit: BoxFit.cover),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: onPick,
+            icon: const Icon(Icons.upload_outlined, size: 18),
+            label: Text(bytes == null ? label : 'Change photo'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+

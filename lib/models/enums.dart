@@ -79,7 +79,10 @@ enum PaymentMethod {
 enum PaymentStatus {
   pending('pending', 'Pending'),
   collected('collected', 'Collected'),
-  settled('settled', 'Settled');
+  settled('settled', 'Settled'),
+  awaitingPayment('awaiting_payment', 'Awaiting payment'),
+  paid('paid', 'Paid'),
+  failed('failed', 'Failed');
 
   const PaymentStatus(this.db, this.label);
   final String db;
