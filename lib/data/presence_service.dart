@@ -81,6 +81,7 @@ class PresenceService extends ChangeNotifier {
       _positionSub = Geolocator.getPositionStream(locationSettings: settings).listen(
         (position) {
           _last = LatLng(position.latitude, position.longitude);
+          notifyListeners();
           _push();
         },
         onError: (_) {

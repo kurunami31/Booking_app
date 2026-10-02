@@ -8,6 +8,7 @@ import '../../core/geo.dart';
 import '../../data/api.dart';
 import '../../data/auth_controller.dart';
 import '../../data/offline_queue.dart';
+import '../../data/presence_service.dart';
 import '../../models/enums.dart';
 import '../../models/rows.dart';
 import '../../widgets/ride_map.dart';
@@ -83,10 +84,105 @@ class _DriverTripBodyState extends State<_DriverTripBody> {
   String? _message;
   Payment? _payment;
 
+  late final PresenceService _presence;
+  RouteResult? _route;
+  DateTime? _lastRouteAt;
+  LatLng? _lastRouteFrom;
+  LatLng? _fallbackPos;
+
   @override
   void initState() {
     super.initState();
     _loadPayment();
+    _presence = context.read<PresenceService>();
+    _presence.addListener(_onPresence);
+    _loadFallbackPosition();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeRoute());
+  }
+
+  @override
+  void dispose() {
+    _presence.removeListener(_onPresence);
+    super.dispose();
+  }
+
+  void _onPresence() {
+    if (!mounted) return;
+    setState(() {});
+    _maybeRoute();
+  }
+
+  Future<void> _loadFallbackPosition() async {
+    try {
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition();
+      if (mounted) setState(() => _fallbackPos = LatLng(pos.latitude, pos.longitude));
+      _maybeRoute();
+    } catch (_) {
+      // no position available
+    }
+  }
+
+  LatLng? get _myPos => _presence.lastPosition ?? _fallbackPos;
+
+  /// Pickup before the ride starts, destination while underway.
+  LatLng? _targetPoint() {
+    final b = widget.booking;
+    if (b.status == BookingStatus.assigned || b.status == BookingStatus.arrived) {
+      if (b.originLat != null && b.originLng != null) {
+        return LatLng(b.originLat!, b.originLng!);
+      }
+    }
+    if (b.status == BookingStatus.inProgress) {
+      if (b.destLat != null && b.destLng != null) {
+        return LatLng(b.destLat!, b.destLng!);
+      }
+    }
+    return null;
+  }
+
+  Future<void> _maybeRoute() async {
+    if (!widget.booking.status.isActive) return;
+    final from = _myPos;
+    final to = _targetPoint();
+    if (from == null || to == null) return;
+
+    final now = DateTime.now();
+    final moved =
+        _lastRouteFrom == null ? double.infinity : haversineKm(_lastRouteFrom!, from);
+    if (_lastRouteAt != null &&
+        now.difference(_lastRouteAt!).inSeconds < 20 &&
+        moved < 0.05) {
+      return;
+    }
+    _lastRouteAt = now;
+    _lastRouteFrom = from;
+
+    try {
+      final route = await context.read<Api>().getRoute(from: from, to: to);
+      if (mounted && route != null) setState(() => _route = route);
+    } catch (_) {
+      // straight-line fallback below
+    }
+  }
+
+  int? _etaMinutes() {
+    final to = _targetPoint();
+    if (to == null) return null;
+    final route = _route;
+    if (route != null && route.points.isNotEmpty && route.durationS > 0) {
+      return route.etaMinutes;
+    }
+    final from = _myPos;
+    if (from == null) return null;
+    return etaMinutes(haversineKm(from, to));
   }
 
   Future<void> _loadPayment() async {
@@ -192,6 +288,7 @@ class _DriverTripBodyState extends State<_DriverTripBody> {
       BookingStatus.inProgress,
     }.contains(booking.status);
 
+    final myPos = _myPos;
     final markers = <RideMarker>[
       if (booking.originLat != null && booking.originLng != null)
         RideMarker(
@@ -207,6 +304,16 @@ class _DriverTripBodyState extends State<_DriverTripBody> {
           label: 'Dropoff: ${booking.destLabel ?? ''}',
           kind: MapMarkerKind.dropoff,
         ),
+      if (myPos != null)
+        RideMarker(
+          id: 'me',
+          point: myPos,
+          label: 'You',
+          kind: MapMarkerKind.driver,
+        ),
+    ];
+    final polylines = <List<LatLng>>[
+      if (_route != null && _route!.points.isNotEmpty) _route!.points,
     ];
 
     return ListView(
@@ -222,7 +329,20 @@ class _DriverTripBodyState extends State<_DriverTripBody> {
           const SizedBox(height: 12),
         ],
         if (markers.isNotEmpty) ...[
-          RideMap(markers: markers, center: markers.first.point),
+          RideMap(markers: markers, polylines: polylines, center: markers.first.point),
+          const SizedBox(height: 12),
+        ],
+        if (booking.status.isActive && _targetPoint() != null) ...[
+          ErrorBanner(
+            _etaMinutes() == null
+                ? (booking.status == BookingStatus.inProgress
+                    ? 'Heading to ${booking.destLabel ?? 'destination'}'
+                    : 'Heading to pickup')
+                : (booking.status == BookingStatus.inProgress
+                    ? '~${_etaMinutes()} min to ${booking.destLabel ?? 'destination'}'
+                    : '~${_etaMinutes()} min to pickup'),
+            tone: Tone.info,
+          ),
           const SizedBox(height: 12),
         ],
         FutureBuilder<Profile?>(
