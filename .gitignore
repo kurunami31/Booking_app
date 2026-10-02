@@ -1,0 +1,22 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+
+# Local secrets (Supabase URL + anon key for --dart-define-from-file)
+env.json
+
+# Android/iOS build output
+android/.gradle/
+android/.kotlin/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+
+# Misc
+.DS_Store
